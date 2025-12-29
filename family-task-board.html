@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Secure Family Task Board</title>
+<style>
+:root{
+  --bg:#f4f6fb;
+  --card:#ffffff;
+  --primary:#6366f1;
+  --success:#22c55e;
+  --warning:#f59e0b;
+  --danger:#ef4444;
+  --text:#111827;
+  --muted:#6b7280;
+  --radius:16px;
+}
+
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont;
+  background:var(--bg);
+  color:var(--text);
+}
+
+header{
+  background:linear-gradient(135deg,#6366f1,#4f46e5);
+  color:white;
+  padding:1rem;
+  text-align:center;
+  font-weight:600;
+}
+
+#filters,#statusFilters{
+  display:flex;
+  gap:.5rem;
+  padding:.75rem;
+  overflow-x:auto;
+}
+
+.filter{
+  padding:.45rem .9rem;
+  border-radius:999px;
+  background:#e5e7eb;
+  cursor:pointer;
+  font-size:.85rem;
+  white-space:nowrap;
+  transition:.2s;
+}
+.filter.active{
+  background:var(--primary);
+  color:white;
+}
+
+#actions{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:.5rem 1rem;
+  flex-wrap:wrap;
+  gap:.5rem;
+}
+
+button{
+  border:none;
+  border-radius:12px;
+  padding:.45rem .8rem;
+  font-size:.85rem;
+  cursor:pointer;
+  transition:.2s;
+}
+button:hover{opacity:.9}
+
+.primary{background:var(--primary);color:white;}
+.secondary{background:#e5e7eb;}
+.dangerBtn{background:var(--danger);color:white;}
+
+#tasks{
+  padding:1rem;
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  gap:1rem;
+}
+
+.task{
+  background:var(--card);
+  border-radius:var(--radius);
+  padding:1rem;
+  box-shadow:0 6px 16px rgba(0,0,0,.08);
+  transition:.2s;
+  position:relative;
+}
+
+.task.low{border-left:6px solid var(--success);}
+.task.medium{border-left:6px solid var(--warning);}
+.task.high{border-left:6px solid var(--danger);}
+
+.task.done{
+  opacity:.55;
+  text-decoration:line-through;
+}
+
+.meta{
+  font-size:.8rem;
+  color:var(--muted);
+  margin-top:.2rem;
+}
+
+.task button{
+  margin-top:.6rem;
+}
+
+.overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.45);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:10;
+}
+
+.panel{
+  background:white;
+  width:90%;
+  max-width:360px;
+  border-radius:20px;
+  padding:1rem;
+  animation:slide .2s ease-out;
+}
+
+@keyframes slide{
+  from{transform:translateY(20px);opacity:0}
+  to{transform:none;opacity:1}
+}
+
+label{
+  display:block;
+  font-size:.8rem;
+  margin:.6rem 0 .2rem;
+}
+
+input,select{
+  width:100%;
+  padding:.45rem;
+  border-radius:10px;
+  border:1px solid #d1d5db;
+}
+
+.toast{
+  position:fixed;
+  bottom:1rem;
+  left:50%;
+  transform:translateX(-50%);
+  background:var(--success);
+  color:white;
+  padding:.4rem .9rem;
+  border-radius:999px;
+  font-size:.85rem;
+  z-index:20;
+  animation:fadeIn 0.3s;
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+</style>
+</head>
+<body>
+
+<header>🔐 Secure Family Task Board</header>
+
+<div id="loginPanel" class="overlay" style="display:flex;">
+  <div class="panel">
+    <h3>Enter Passphrase</h3>
+    <input type="password" id="passphrase" placeholder="Enter your passphrase">
+    <br><br>
+    <button class="primary" onclick="initApp()">Enter</button>
+  </div>
+</div>
+
+<div id="filters"></div>
+<div id="statusFilters" style="display:none;"></div>
+
+<div id="actions" style="display:none;">
+  <button class="secondary" onclick="openUserPanel()">➕ User</button>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <button class="secondary" onclick="openTaskPanel()">➕ Task</button>
+    <button class="primary" onclick="save()">💾 Save</button>
+  </div>
+</div>
+
+<div id="tasks"></div>
+
+<!-- Task Panel -->
+<div class="overlay" id="taskOverlay">
+  <div class="panel">
+    <h3>Add Task</h3>
+    <label>Task name</label>
+    <input id="tTitle">
+    <label>Assign to</label>
+    <select id="tUser"></select>
+    <label>Due date (optional)</label>
+    <input type="date" id="tDue">
+    <label>Priority</label>
+    <select id="tPriority">
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+    <br><br>
+    <button class="primary" onclick="addTask()">Add</button>
+    <button class="secondary" onclick="closePanels()">Cancel</button>
+  </div>
+</div>
+
+<!-- User Panel -->
+<div class="overlay" id="userOverlay">
+  <div class="panel">
+    <h3>Manage Users</h3>
+    <label>User name</label>
+    <input id="uName">
+    <br><br>
+    <button class="primary" onclick="addUser()">Add</button>
+    <button class="dangerBtn" onclick="deleteUser()">Delete Selected User</button>
+    <button class="secondary" onclick="closePanels()">Cancel</button>
+  </div>
+</div>
+
+<script>
+let STATE={users:[],tasks:[]};
+let filter="All";
+let statusFilter="all";
+let key,gistId,token;
+
+// Encryption helpers
+async function getKey(passphrase){
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(passphrase), {name:"PBKDF2"}, false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {name:"PBKDF2", salt:enc.encode("familyTaskSalt"), iterations:250000, hash:"SHA-256"},
+    keyMaterial,
+    {name:"AES-GCM", length:256},
+    false,
+    ["encrypt","decrypt"]
+  );
+}
+
+async function encryptData(obj){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = new TextEncoder().encode(JSON.stringify(obj));
+  const cipher = await crypto.subtle.encrypt({name:"AES-GCM",iv},key,data);
+  return btoa(String.fromCharCode(...iv))+":"+btoa(String.fromCharCode(...new Uint8Array(cipher)));
+}
+
+async function decryptData(str){
+  const [ivStr,cipherStr] = str.split(":");
+  const iv = Uint8Array.from(atob(ivStr),c=>c.charCodeAt(0));
+  const cipher = Uint8Array.from(atob(cipherStr),c=>c.charCodeAt(0));
+  const plain = await crypto.subtle.decrypt({name:"AES-GCM",iv},key,cipher);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+// Rendering functions
+function renderFilters(){
+  const f=document.getElementById("filters");
+  f.innerHTML="";
+  STATE.users.forEach(u=>{
+    const d=document.createElement("div");
+    d.className="filter"+(u===filter?" active":"");
+    d.textContent=u;
+    d.onclick=()=>{filter=u;render();}
+    f.appendChild(d);
+  });
+}
+
+function renderStatusFilters(){
+  const f=document.getElementById("statusFilters");
+  f.style.display="flex";
+  f.innerHTML="";
+  ["all","pending","done"].forEach(s=>{
+    const d=document.createElement("div");
+    d.className="filter"+(s===statusFilter?" active":"");
+    d.textContent=s.charAt(0).toUpperCase() + s.slice(1);
+    d.onclick=()=>{statusFilter=s;render();}
+    f.appendChild(d);
+  });
+}
+
+function renderTasks(){
+  const t=document.getElementById("tasks");
+  t.innerHTML="";
+  STATE.tasks.filter(x=>
+    (filter==="All"||x.assigned===filter)&&
+    (statusFilter==="all"|| (statusFilter==="done"&&x.done) || (statusFilter==="pending"&&!x.done))
+  ).forEach((x,i)=>{
+    const d=document.createElement("div");
+    d.className=`task ${x.priority} ${x.done?"done":""}`;
+    d.innerHTML=`
+      <strong>${x.title}</strong>
+      <div class="meta">👤 ${x.assigned||"Unassigned"}</div>
+      <div class="meta">📅 ${x.due||"—"}</div>
+      <button class="secondary">${x.done?"Undo":"Done"}</button>
+    `;
+    d.querySelector("button").onclick=()=>{x.done=!x.done;render();}
+    t.appendChild(d);
+  });
+}
+
+function render(){
+  renderFilters();
+  renderStatusFilters();
+  renderTasks();
+}
+
+function openTaskPanel(){
+  tTitle.value="";
+  tDue.value="";
+  const s=document.getElementById("tUser");
+  s.innerHTML="";
+  STATE.users.forEach(u=>{
+    if(u!=="All"){const o=document.createElement("option"); o.textContent=u; s.appendChild(o);}
+  });
+  taskOverlay.style.display="flex";
+}
+
+function openUserPanel(){
+  uName.value="";
+  userOverlay.style.display="flex";
+}
+
+function closePanels(){
+  taskOverlay.style.display="none";
+  userOverlay.style.display="none";
+}
+
+function addTask(){
+  if(!tTitle.value.trim()) return;
+  STATE.tasks.push({
+    title:tTitle.value.trim(),
+    assigned:tUser.value,
+    due:tDue.value,
+    priority:tPriority.value,
+    done:false
+  });
+  closePanels();
+  render();
+}
+
+function addUser(){
+  const n=uName.value.trim();
+  if(!n||STATE.users.includes(n)) return;
+  STATE.users.push(n);
+  closePanels();
+  render();
+}
+
+function deleteUser(){
+  const n=uName.value.trim();
+  if(!n || !STATE.users.includes(n)) return;
+  STATE.users = STATE.users.filter(u=>u!==n);
+  STATE.tasks = STATE.tasks.map(t=>t.assigned===n?{...t,assigned:""}:t);
+  closePanels();
+  render();
+}
+
+// GitHub Gist functions
+async function fetchGist(){
+  const resp = await fetch(`https://api.github.com/gists/${gistId}`);
+  const data = await resp.json();
+  const encContent = Object.values(data.files)[0].content;
+  STATE = await decryptData(encContent);
+}
+
+async function save(){
+  const encContent = await encryptData(STATE);
+  if(!token){
+    alert("GitHub token missing. Cannot save online!");
+    return;
+  }
+  await fetch(`https://api.github.com/gists/${gistId}`,{
+    method:"PATCH",
+    headers:{Authorization:"token "+token},
+    body:JSON.stringify({files:{[gistId+".txt"]:{content:encContent}}})
+  });
+  const t=document.createElement("div");
+  t.className="toast";
+  t.textContent="Saved ✔";
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(),2000);
+}
+
+// --- Initialize App ---
+async function initApp(){
+  const p = document.getElementById("passphrase").value.trim();
+  if(!p){alert("Enter passphrase");return;}
+  const parts = p.split(" ");
+  if(parts.length<3){alert("Passphrase format: key gistID token");return;}
+  const [passKey,gId,tok] = parts;
+  gistId=gId; token=tok;
+  key = await getKey(passKey);
+  try{await fetchGist();}catch(e){
+    alert("Failed to fetch Gist. Ensure the secret Gist exists and passphrase is correct.");
+    return;
+  }
+  document.getElementById("loginPanel").style.display="none";
+  document.getElementById("actions").style.display="flex";
+  document.getElementById("statusFilters").style.display="flex";
+  render();
+  // Auto-refresh every 10 seconds
+  setInterval(async()=>{
+    try{await fetchGist(); render();}catch(e){console.warn("Auto-refresh failed");}
+  },10000);
+}
+</script>
+</body>
+</html>
