@@ -30,6 +30,17 @@ header{
   padding:1rem;
   text-align:center;
   font-weight:600;
+  display:flex;
+  flex-direction:column;
+  gap:.5rem;
+  align-items:center;
+}
+
+.clock{
+  display:flex;
+  gap:1rem;
+  font-size:0.85rem;
+  font-weight:500;
 }
 
 #filters,#statusFilters{
@@ -47,7 +58,16 @@ header{
   font-size:.85rem;
   white-space:nowrap;
   transition:.2s;
+  position:relative;
 }
+.filter .count{
+  font-size:0.7rem;
+  background:#d1d5db;
+  padding:0 .3rem;
+  border-radius:999px;
+  margin-left:.3rem;
+}
+
 .filter.active{
   background:var(--primary);
   color:white;
@@ -92,14 +112,10 @@ button:hover{opacity:.9}
   position:relative;
 }
 
-.task.low{border-left:6px solid var(--success);}
-.task.medium{border-left:6px solid var(--warning);}
+.task.low{border-left:6px solid var(--warning);}
+.task.medium{border-left:6px solid orange;}
 .task.high{border-left:6px solid var(--danger);}
-
-.task.done{
-  opacity:.55;
-  text-decoration:line-through;
-}
+.task.done{border-left:6px solid var(--success); opacity:.55; text-decoration:line-through;}
 
 .meta{
   font-size:.8rem;
@@ -108,7 +124,14 @@ button:hover{opacity:.9}
 }
 
 .task button{
-  margin-top:.6rem;
+  margin-top:.4rem;
+  margin-right:.3rem;
+}
+
+.priority-bar{
+  height:6px;
+  border-radius:3px;
+  margin-top:4px;
 }
 
 .overlay{
@@ -162,11 +185,30 @@ input,select{
   animation:fadeIn 0.3s;
 }
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+#reportCard{
+  margin:1rem;
+  padding:1rem;
+  background:white;
+  border-radius:16px;
+  box-shadow:0 6px 16px rgba(0,0,0,.08);
+}
+
+#reportCard h3{
+  margin-top:0;
+}
+
 </style>
 </head>
 <body>
 
-<header>🔐 Secure Family Task Board</header>
+<header>
+  🔐 Secure Family Task Board
+  <div class="clock">
+    <div>🇮🇳 IST: <span id="istClock"></span></div>
+    <div>🇩🇪 CET: <span id="gerClock"></span></div>
+  </div>
+</header>
 
 <div id="loginPanel" class="overlay" style="display:flex;">
   <div class="panel">
@@ -181,25 +223,28 @@ input,select{
 <div id="statusFilters" style="display:none;"></div>
 
 <div id="actions" style="display:none;">
-  <button class="secondary" onclick="openUserPanel()">➕ User</button>
+  <button class="secondary" onclick="openUserPanel()">Manage Users</button>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
     <button class="secondary" onclick="openTaskPanel()">➕ Task</button>
     <button class="primary" onclick="save()">💾 Save</button>
+    <button class="secondary" onclick="openLog()">📜 Log</button>
   </div>
 </div>
 
 <div id="tasks"></div>
 
+<div id="reportCard"></div>
+
 <!-- Task Panel -->
 <div class="overlay" id="taskOverlay">
   <div class="panel">
-    <h3>Add Task</h3>
+    <h3>Add / Edit Task</h3>
     <label>Task name</label>
     <input id="tTitle">
-    <label>Assign to</label>
-    <select id="tUser"></select>
+    <label>Assign to (multi-select)</label>
+    <select id="tUser" multiple></select>
     <label>Due date (optional)</label>
-    <input type="date" id="tDue">
+    <input type="datetime-local" id="tDue">
     <label>Priority</label>
     <select id="tPriority">
       <option value="low">Low</option>
@@ -207,7 +252,7 @@ input,select{
       <option value="high">High</option>
     </select>
     <br><br>
-    <button class="primary" onclick="addTask()">Add</button>
+    <button class="primary" onclick="addOrEditTask()">Save Task</button>
     <button class="secondary" onclick="closePanels()">Cancel</button>
   </div>
 </div>
@@ -218,20 +263,44 @@ input,select{
     <h3>Manage Users</h3>
     <label>User name</label>
     <input id="uName">
+    <label>Select user</label>
+    <select id="selectUser"></select>
     <br><br>
-    <button class="primary" onclick="addUser()">Add</button>
+    <button class="primary" onclick="addUser()">Add User</button>
     <button class="dangerBtn" onclick="deleteUser()">Delete Selected User</button>
     <button class="secondary" onclick="closePanels()">Cancel</button>
   </div>
 </div>
 
+<!-- Log Panel -->
+<div class="overlay" id="logOverlay">
+  <div class="panel">
+    <h3>Action Log</h3>
+    <div id="logContent" style="max-height:400px;overflow:auto;"></div>
+    <br>
+    <button class="secondary" onclick="closeLog()">Close</button>
+  </div>
+</div>
+
 <script>
-let STATE={users:[],tasks:[]};
+let STATE={users:[],tasks:[],log:[]};
 let filter="All";
 let statusFilter="all";
 let key,gistId,token;
+let editTaskIndex=null;
 
-// Encryption helpers
+// ----- Clocks -----
+function updateClocks(){
+  const now = new Date();
+  document.getElementById("istClock").textContent =
+    now.toLocaleTimeString("en-IN",{hour12:false,timeZone:"Asia/Kolkata"});
+  document.getElementById("gerClock").textContent =
+    now.toLocaleTimeString("de-DE",{hour12:false,timeZone:"Europe/Berlin"});
+}
+setInterval(updateClocks,1000);
+updateClocks();
+
+// ----- Encryption helpers -----
 async function getKey(passphrase){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(passphrase), {name:"PBKDF2"}, false, ["deriveKey"]);
@@ -243,14 +312,12 @@ async function getKey(passphrase){
     ["encrypt","decrypt"]
   );
 }
-
 async function encryptData(obj){
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = new TextEncoder().encode(JSON.stringify(obj));
   const cipher = await crypto.subtle.encrypt({name:"AES-GCM",iv},key,data);
   return btoa(String.fromCharCode(...iv))+":"+btoa(String.fromCharCode(...new Uint8Array(cipher)));
 }
-
 async function decryptData(str){
   const [ivStr,cipherStr] = str.split(":");
   const iv = Uint8Array.from(atob(ivStr),c=>c.charCodeAt(0));
@@ -259,17 +326,24 @@ async function decryptData(str){
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-// Rendering functions
+// ----- Render Filters and Counts -----
 function renderFilters(){
   const f=document.getElementById("filters");
   f.innerHTML="";
   STATE.users.forEach(u=>{
+    const count = STATE.tasks.filter(t=>t.assigned.includes(u.name)).length;
     const d=document.createElement("div");
-    d.className="filter"+(u===filter?" active":"");
-    d.textContent=u;
-    d.onclick=()=>{filter=u;render();}
+    d.className="filter"+(u.name===filter?" active":"");
+    d.innerHTML=`${u.name} <span class="count">${count}</span>`;
+    d.onclick=()=>{filter=u.name;render();}
     f.appendChild(d);
   });
+  const allCount = STATE.tasks.length;
+  const allFilter=document.createElement("div");
+  allFilter.className="filter"+("All"===filter?" active":"");
+  allFilter.innerHTML=`All <span class="count">${allCount}</span>`;
+  allFilter.onclick=()=>{filter="All";render();}
+  f.prepend(allFilter);
 }
 
 function renderStatusFilters(){
@@ -279,136 +353,142 @@ function renderStatusFilters(){
   ["all","pending","done"].forEach(s=>{
     const d=document.createElement("div");
     d.className="filter"+(s===statusFilter?" active":"");
-    d.textContent=s.charAt(0).toUpperCase() + s.slice(1);
+    d.textContent=s.charAt(0).toUpperCase()+s.slice(1);
     d.onclick=()=>{statusFilter=s;render();}
     f.appendChild(d);
   });
+}
+
+// ----- Render Tasks -----
+function formatTimeISO(d){
+  const dt = new Date(d);
+  const ist = dt.toLocaleString("en-IN",{timeZone:"Asia/Kolkata"});
+  const ger = dt.toLocaleString("de-DE",{timeZone:"Europe/Berlin"});
+  return `${ist} / ${ger}`;
 }
 
 function renderTasks(){
   const t=document.getElementById("tasks");
   t.innerHTML="";
   STATE.tasks.filter(x=>
-    (filter==="All"||x.assigned===filter)&&
+    (filter==="All"|| x.assigned.includes(filter)) &&
     (statusFilter==="all"|| (statusFilter==="done"&&x.done) || (statusFilter==="pending"&&!x.done))
   ).forEach((x,i)=>{
     const d=document.createElement("div");
     d.className=`task ${x.priority} ${x.done?"done":""}`;
+    const usersHtml = x.assigned.map(u=>{
+      const icon = STATE.users.find(us=>us.name===u)?.type==="man"?"👨":
+                   STATE.users.find(us=>us.name===u)?.type==="woman"?"👩":"🧒";
+      return `${icon} ${u}`;
+    }).join(", ");
     d.innerHTML=`
       <strong>${x.title}</strong>
-      <div class="meta">👤 ${x.assigned||"Unassigned"}</div>
-      <div class="meta">📅 ${x.due||"—"}</div>
+      <div class="meta">👤 ${usersHtml||"Unassigned"}</div>
+      <div class="meta">📅 ${x.due?formatTimeISO(x.due):"—"}</div>
+      <div class="priority-bar" style="background:${x.done?'var(--success)':x.priority==='low'?'yellow':x.priority==='medium'?'orange':'red'}"></div>
       <button class="secondary">${x.done?"Undo":"Done"}</button>
+      <button class="primary">Edit</button>
+      <button class="dangerBtn">Delete</button>
     `;
-    d.querySelector("button").onclick=()=>{x.done=!x.done;render();}
+    d.querySelectorAll("button")[0].onclick=()=>{x.done=!x.done;logAction(`Task '${x.title}' ${x.done?"completed":"marked pending"}`, x.assigned);render();}
+    d.querySelectorAll("button")[1].onclick=()=>{openTaskPanel(i);}
+    d.querySelectorAll("button")[2].onclick=async()=>{
+      if(!confirm("Are you sure to delete? (1/2)")) return;
+      if(!confirm("Confirm deletion? (2/2)")) return;
+      logAction(`Task '${x.title}' deleted`, x.assigned);
+      STATE.tasks.splice(i,1);render();
+    }
     t.appendChild(d);
   });
 }
 
-function render(){
-  renderFilters();
-  renderStatusFilters();
-  renderTasks();
+// ----- Render Report -----
+function renderReport(){
+  const total = STATE.tasks.length;
+  const completed = STATE.tasks.filter(t=>t.done).length;
+  const pending = total-completed;
+  const perUser={};
+  STATE.users.forEach(u=>{perUser[u.name]=0;});
+  STATE.tasks.forEach(t=>t.assigned.forEach(u=>{if(perUser[u]!==undefined) perUser[u]++;}));
+  const perPriority={low:0,medium:0,high:0};
+  STATE.tasks.forEach(t=>perPriority[t.priority]++);
+  const reportDiv=document.getElementById("reportCard");
+  reportDiv.innerHTML=`
+    <h3>Report Card</h3>
+    <div>Total tasks: ${total}</div>
+    <div>Completed: ${completed}</div>
+    <div>Pending: ${pending}</div>
+    <div>Tasks per user: ${JSON.stringify(perUser)}</div>
+    <div>Tasks per priority: ${JSON.stringify(perPriority)}</div>
+  `;
 }
 
-function openTaskPanel(){
-  tTitle.value="";
-  tDue.value="";
+// ----- Render Filters + Tasks + Report -----
+function render(){renderFilters(); renderStatusFilters(); renderTasks(); renderReport(); renderLog();}
+
+// ----- Panels -----
+function openTaskPanel(index=null){
+  editTaskIndex=index;
+  tTitle.value=index!==null?STATE.tasks[index].title:"";
+  tDue.value=index!==null?STATE.tasks[index].due:"";
+  tPriority.value=index!==null?STATE.tasks[index].priority:"low";
   const s=document.getElementById("tUser");
   s.innerHTML="";
-  STATE.users.forEach(u=>{
-    if(u!=="All"){const o=document.createElement("option"); o.textContent=u; s.appendChild(o);}
-  });
+  STATE.users.forEach(u=>{if(u.name!=="All"){const o=document.createElement("option"); o.value=u.name; o.textContent=u.name; if(index!==null && STATE.tasks[index].assigned.includes(u.name)) o.selected=true; s.appendChild(o);}});
   taskOverlay.style.display="flex";
+}
+
+function addOrEditTask(){
+  const assigned=[...tUser.selectedOptions].map(o=>o.value);
+  if(!tTitle.value.trim()) return;
+  const taskObj={title:tTitle.value.trim(),assigned,due:tDue.value,priority:tPriority.value,done:editTaskIndex!==null?STATE.tasks[editTaskIndex].done:false};
+  if(editTaskIndex!==null){
+    logAction(`Task '${STATE.tasks[editTaskIndex].title}' edited`, assigned);
+    STATE.tasks[editTaskIndex]=taskObj;
+  } else {STATE.tasks.push(taskObj); logAction(`Task '${taskObj.title}' added`, assigned);}
+  closePanels();
+  render();
 }
 
 function openUserPanel(){
   uName.value="";
+  const sel=document.getElementById("selectUser");
+  sel.innerHTML="";
+  STATE.users.forEach(u=>{if(u.name!=="All"){const o=document.createElement("option"); o.value=u.name; o.textContent=u.name; sel.appendChild(o);}});
   userOverlay.style.display="flex";
 }
 
-function closePanels(){
-  taskOverlay.style.display="none";
-  userOverlay.style.display="none";
-}
+function closePanels(){taskOverlay.style.display="none"; userOverlay.style.display="none"; logOverlay.style.display="none";}
 
-function addTask(){
-  if(!tTitle.value.trim()) return;
-  STATE.tasks.push({
-    title:tTitle.value.trim(),
-    assigned:tUser.value,
-    due:tDue.value,
-    priority:tPriority.value,
-    done:false
-  });
-  closePanels();
-  render();
-}
+// ----- Users -----
+function addUser(){const n=uName.value.trim(); if(!n || STATE.users.find(u=>u.name===n)) return; STATE.users.push({name:n,type:"man"}); logAction(`User '${n}' added`); closePanels(); render();}
+function deleteUser(){const sel=document.getElementById("selectUser"); const n=sel.value; if(!n) return; if(!confirm(`Delete user ${n}?`)) return; STATE.users=STATE.users.filter(u=>u.name!==n); STATE.tasks.forEach(t=>t.assigned=t.assigned.filter(u=>u!==n)); logAction(`User '${n}' deleted`); closePanels(); render();}
 
-function addUser(){
-  const n=uName.value.trim();
-  if(!n||STATE.users.includes(n)) return;
-  STATE.users.push(n);
-  closePanels();
-  render();
-}
+// ----- Log -----
+function logAction(action, users=[]){const now=new Date().toISOString(); STATE.log.push({timestamp:now,action,users}); renderLog();}
+function renderLog(){const logDiv=document.getElementById("logContent"); logDiv.innerHTML=STATE.log.map(l=>{const dateIST=new Date(l.timestamp).toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}); const dateGER=new Date(l.timestamp).toLocaleString("de-DE",{timeZone:"Europe/Berlin"}); return `<div>🕒 ${dateIST} / ${dateGER} - ${l.action} [${l.users.join(", ")}]</div>`;}).join("");}
+function openLog(){logOverlay.style.display="flex";}
+function closeLog(){logOverlay.style.display="none";}
 
-function deleteUser(){
-  const n=uName.value.trim();
-  if(!n || !STATE.users.includes(n)) return;
-  STATE.users = STATE.users.filter(u=>u!==n);
-  STATE.tasks = STATE.tasks.map(t=>t.assigned===n?{...t,assigned:""}:t);
-  closePanels();
-  render();
-}
+// ----- GitHub Gist -----
+async function fetchGist(){const resp=await fetch(`https://api.github.com/gists/${gistId}`);const data=await resp.json();const encContent=Object.values(data.files)[0].content; STATE=await decryptData(encContent);}
+async function save(){const encContent=await encryptData(STATE); if(!token){alert("GitHub token missing. Cannot save online!"); return;} await fetch(`https://api.github.com/gists/${gistId}`,{method:"PATCH",headers:{Authorization:"token "+token},body:JSON.stringify({files:{[gistId+".txt"]:{content:encContent}}})}); const t=document.createElement("div"); t.className="toast"; t.textContent="Saved ✔"; document.body.appendChild(t); setTimeout(()=>t.remove(),2000);}
 
-// GitHub Gist functions
-async function fetchGist(){
-  const resp = await fetch(`https://api.github.com/gists/${gistId}`);
-  const data = await resp.json();
-  const encContent = Object.values(data.files)[0].content;
-  STATE = await decryptData(encContent);
-}
-
-async function save(){
-  const encContent = await encryptData(STATE);
-  if(!token){
-    alert("GitHub token missing. Cannot save online!");
-    return;
-  }
-  await fetch(`https://api.github.com/gists/${gistId}`,{
-    method:"PATCH",
-    headers:{Authorization:"token "+token},
-    body:JSON.stringify({files:{[gistId+".txt"]:{content:encContent}}})
-  });
-  const t=document.createElement("div");
-  t.className="toast";
-  t.textContent="Saved ✔";
-  document.body.appendChild(t);
-  setTimeout(()=>t.remove(),2000);
-}
-
-// --- Initialize App ---
+// ----- Initialize App -----
 async function initApp(){
-  const p = document.getElementById("passphrase").value.trim();
+  const p=document.getElementById("passphrase").value.trim();
   if(!p){alert("Enter passphrase");return;}
-  const parts = p.split(" ");
+  const parts=p.split(" ");
   if(parts.length<3){alert("Passphrase format: key gistID token");return;}
-  const [passKey,gId,tok] = parts;
+  const [passKey,gId,tok]=parts;
   gistId=gId; token=tok;
-  key = await getKey(passKey);
-  try{await fetchGist();}catch(e){
-    alert("Failed to fetch Gist. Ensure the secret Gist exists and passphrase is correct.");
-    return;
-  }
+  key=await getKey(passKey);
+  try{await fetchGist();}catch(e){alert("Failed to fetch Gist. Ensure the secret Gist exists and passphrase is correct."); return;}
   document.getElementById("loginPanel").style.display="none";
   document.getElementById("actions").style.display="flex";
   document.getElementById("statusFilters").style.display="flex";
   render();
-  // Auto-refresh every 10 seconds
-  setInterval(async()=>{
-    try{await fetchGist(); render();}catch(e){console.warn("Auto-refresh failed");}
-  },10000);
+  setInterval(async()=>{try{await fetchGist(); render();}catch(e){console.warn("Auto-refresh failed");}},10000);
 }
 </script>
 </body>
